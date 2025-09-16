@@ -1,0 +1,53 @@
+env:
+  mode: dev     # 'dev' => yfinance; 'prod' => IBKR
+mode: daily
+
+# Univers: 15 ETFs sectoriels / broad-market très liquides
+universe:
+  tickers: [SPY, QQQ, DIA, IWM, XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLRE, XLU, XLB, XLC]
+
+# Rebalancing des paires: fréquence de recalcul des corr/cointegration & β
+pairs:
+  rebalance_days: 21
+
+# Fenêtres de calcul (rolling)
+lookbacks:
+  corr_days: 120
+  coint_days: 120
+  zscore_days: 60
+
+# Seuils de décision
+thresholds:
+  entry_z: 2.0
+  exit_z: 0.5
+  stop_z: 3.0
+  time_stop_days: 10
+
+# Gestion du risque
+risk:
+  per_trade_pct: 0.003
+  max_pairs_open: 5
+  daily_dd_stop_pct: 0.02
+
+# Coûts & exécution (simulés en backtest)
+costs:
+  commission_per_share: 0.005
+  slippage_bp: 2
+
+# Données & stockage
+data:
+  source_dev: yfinance
+  source_prod: ibkr
+  store: parquet
+  root_dir: data/eod/ETFs
+  calendar: US
+
+# Filtres de sélection de paires
+selection:
+  min_corr: 0.6
+  max_half_life_days: 20
+  pval_coint: 0.05
+
+# Sorties
+reports:
+  pairs_scored_dir: reports/pairs_scored
