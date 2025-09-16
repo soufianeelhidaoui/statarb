@@ -17,6 +17,10 @@ def fetch_eod_yfinance(ticker: str, start: str = '2015-01-01', end: str | None =
     df = yf.download(ticker, start=start, end=end, auto_adjust=False, progress=False)
     if df.empty:
         raise RuntimeError(f"Aucune donnée pour {ticker}")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    
     df = df.rename(columns={'Open':'open','High':'high','Low':'low','Close':'close','Adj Close':'adj_close','Volume':'volume'})
     df.index.name = 'date'
     return df[['open','high','low','close','adj_close','volume']].astype(float)
