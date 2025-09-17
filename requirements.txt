@@ -9,3 +9,4 @@ ib-insync>=0.9.86
 PyYAML>=6.0.2
 matplotlib>=3.10.6
 seaborn>=0.13.2
+statsmodels>=0.14

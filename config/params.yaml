@@ -1,6 +1,9 @@
 env:
-  mode: dev     # 'dev' => yfinance; 'prod' => IBKR
-mode: daily
+  mode: dev        # 'dev' => yfinance; 'prod' => IBKR
+data:
+  root_dir: data/eod/ETFs
+
+mode: daily        # trading frequency tag (informational, not enforced in code)
 
 # Univers: 15 ETFs sectoriels / broad-market très liquides
 universe:
@@ -10,22 +13,22 @@ universe:
 pairs:
   rebalance_days: 21
 
-# Fenêtres de calcul (rolling)
+# Fenêtres de calcul (rolling) — legacy keys (still used by scoring/backtest)
 lookbacks:
   corr_days: 120
   coint_days: 120
-  zscore_days: 60
+  zscore_days: 60   # legacy; dynamic z-window can override via zscore.min_window & half-life
 
-# Seuils de décision
+# Seuils de décision — legacy block for backtest.simulate_pair()
 thresholds:
-  entry_z: 2.0
+  entry_z: 2.2      # keep in sync with zscore.entry_z
   exit_z: 0.5
   stop_z: 3.0
   time_stop_days: 10
 
 # Gestion du risque
 risk:
-  per_trade_pct: 0.003
+  per_trade_pct: 0.003     # ~0.3% du capital risqué par paire
   max_pairs_open: 5
   daily_dd_stop_pct: 0.02
 
@@ -42,12 +45,60 @@ data:
   root_dir: data/eod/ETFs
   calendar: US
 
-# Filtres de sélection de paires
+# Filtres de sélection de paires (scoring -> selection)
 selection:
   min_corr: 0.6
   max_half_life_days: 20
   pval_coint: 0.05
 
-# Sorties
+# Sorties (emplacement des paires scorées)
 reports:
   pairs_scored_dir: reports/pairs_scored
+
+# ---------------------- New recommended blocks ----------------------
+
+# Prix: utiliser adj_close si dispo (dividendes inclus)
+prices:
+  use_adj_close: true
+
+# β rolling / hedge dynamique (utilisé par decisions.py)
+beta:
+  method: rolling_ols      # future: kalman
+  lookback: 60
+
+# Stabilité de la coint/HL (multi-fenêtres)
+stability:
+  subwindows: 3
+  lookback_days: 120
+  adf_threshold: 0.05
+  half_life_max: 20
+  min_pass_ratio: 0.67
+
+# Filtre de régime (mean-reversion)
+regime:
+  hurst_max: 0.5
+  variance_ratio_max: 1.0
+  lookback_days: 120
+  vix_killswitch: false
+  vix_threshold: 28.0
+
+# Z-score dynamique (décisions)
+zscore:
+  min_window: 20           # z_window = max(min_window, round(3*HL))
+  entry_z: 2.2
+  exit_z: 0.5
+  stop_z: 3.0
+  time_stop_days: 10
+
+# Quality gates & contraintes de décision
+decision:
+  require_stable_coint: true
+  require_regime_ok: true
+  max_beta_instability_pct: 0.3
+  max_turnover_per_month: 20
+
+# Exports additionnels
+exports:
+  journals_dir: reports/journals
+  decisions_csv: reports/decisions.csv
+  topk: 30
