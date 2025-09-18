@@ -93,3 +93,23 @@ def combine_score(rho: float, pval: float, half_life: float, sigma_spread: float
     s3 = 1.0 / (1.0 + half_life)
     s4 = 1.0 / (1.0 + sigma_spread)
     return float(2.0*s1 + 1.5*s2 + 1.0*s3 + 0.5*s4)
+
+def _beta_ols(y, x):
+    x_ = np.vstack([np.ones(len(x)), x.values]).T
+    b = np.linalg.lstsq(x_, y.values, rcond=None)[0]
+    alpha, beta = float(b[0]), float(b[1])
+    return alpha, beta
+
+def _halflife_ar1(series: pd.Series) -> float:
+    s = pd.Series(series).dropna()
+    if len(s) < 30:
+        return np.nan
+    ds = s.diff().dropna()
+    s_lag = s.shift(1).dropna()
+    X = s_lag.values.reshape(-1, 1)
+    Y = ds.values
+    phi = np.linalg.lstsq(np.hstack([np.ones_like(X), X]), Y, rcond=None)[0][1]
+    if phi <= -0.999 or phi >= 0.999:
+        return np.nan
+    hl = -np.log(2) / np.log(1 + phi)
+    return float(hl) if hl > 0 else np.nan

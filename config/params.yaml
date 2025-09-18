@@ -1,104 +1,95 @@
 env:
-  mode: dev        # 'dev' => yfinance; 'prod' => IBKR
-data:
-  root_dir: data/eod/ETFs
+  mode: prod   # 'dev' => yfinance; 'prod' => IBKR
 
-mode: daily        # trading frequency tag (informational, not enforced in code)
+mode: daily
 
-# Univers: 15 ETFs sectoriels / broad-market très liquides
 universe:
   tickers: [SPY, QQQ, DIA, IWM, XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLRE, XLU, XLB, XLC]
 
-# Rebalancing des paires: fréquence de recalcul des corr/cointegration & β
 pairs:
   rebalance_days: 21
 
-# Fenêtres de calcul (rolling) — legacy keys (still used by scoring/backtest)
 lookbacks:
   corr_days: 120
   coint_days: 120
-  zscore_days: 60   # legacy; dynamic z-window can override via zscore.min_window & half-life
+  zscore_days_min: 12
+  zscore_mult_half_life: 3.0
 
-# Seuils de décision — legacy block for backtest.simulate_pair()
 thresholds:
-  entry_z: 2.2      # keep in sync with zscore.entry_z
-  exit_z: 0.5
+  entry_z: 2.2
+  exit_z: 0.2
   stop_z: 3.0
   time_stop_days: 10
 
-# Gestion du risque
 risk:
-  per_trade_pct: 0.003     # ~0.3% du capital risqué par paire
+  capital: 100000
+  per_trade_pct: 0.003
   max_pairs_open: 5
   daily_dd_stop_pct: 0.02
 
-# Coûts & exécution (simulés en backtest)
 costs:
   commission_per_share: 0.005
   slippage_bp: 2
 
-# Données & stockage
 data:
   source_dev: yfinance
   source_prod: ibkr
   store: parquet
+  separate_roots: true
   root_dir: data/eod/ETFs
+  root_dir_dev: data/eod/ETFs_dev
+  root_dir_prod: data/eod/ETFs_prod
   calendar: US
 
-# Filtres de sélection de paires (scoring -> selection)
+quality:
+  px_policy: "best"                 # 'best' (adj si dispo, sinon close) | 'close_only'
+  prefer_adj_close: true
+  rebuild_adj_from_yahoo: true      # calcule adj_close depuis Yahoo (facteur) + is_ex_div
+  compare_adj_tolerance_bp: 50
+  mask_ex_div: true
+  mask_ex_div_days_after: 1
+  min_volume: 1000000
+  max_bidask_spread_bp: 20
+
+stats_filters:
+  require_coint: true
+  coint_pval_max: 0.05
+  half_life_max_days: 20
+  half_life_min_days: 2
+  half_life_stability_tol: 0.20
+  z_cap: 5.0
+  beta_stability_tol: 0.20
+
+market_filters:
+  enable: true
+  vix_path: data/eod/ETFs_dev/^VIX.parquet
+  vix_max: 35
+  macro_calendar_csv: config/macro_calendar.csv
+  cool_off_hours: 2
+
 selection:
   min_corr: 0.6
   max_half_life_days: 20
   pval_coint: 0.05
 
-# Sorties (emplacement des paires scorées)
+quality:
+  strict: true
+  min_history_days: 200
+  min_overlap_days: 120         # chevauchement min YA/XB en jours utiles
+  max_nan_ratio_px: 0.01        # max 1% de NaN dans px (après coalesce adj→close)
+  require_adj_close: true       # exige adj_close construit sur toute l’histoire
+  require_provenance_match: true
+  require_ex_div_mask: true
+  require_half_life: true
+
+decision:
+  cool_off_bars: 2             
+  min_bars_between_entries: 3 
+  max_turnover_per_month: 8
+
+exports:
+  topk: 20
+  reports_dir: reports
+
 reports:
   pairs_scored_dir: reports/pairs_scored
-
-# ---------------------- New recommended blocks ----------------------
-
-# Prix: utiliser adj_close si dispo (dividendes inclus)
-prices:
-  use_adj_close: true
-
-# β rolling / hedge dynamique (utilisé par decisions.py)
-beta:
-  method: rolling_ols      # future: kalman
-  lookback: 60
-
-# Stabilité de la coint/HL (multi-fenêtres)
-stability:
-  subwindows: 3
-  lookback_days: 120
-  adf_threshold: 0.05
-  half_life_max: 20
-  min_pass_ratio: 0.67
-
-# Filtre de régime (mean-reversion)
-regime:
-  hurst_max: 0.5
-  variance_ratio_max: 1.0
-  lookback_days: 120
-  vix_killswitch: false
-  vix_threshold: 28.0
-
-# Z-score dynamique (décisions)
-zscore:
-  min_window: 20           # z_window = max(min_window, round(3*HL))
-  entry_z: 2.2
-  exit_z: 0.5
-  stop_z: 3.0
-  time_stop_days: 10
-
-# Quality gates & contraintes de décision
-decision:
-  require_stable_coint: true
-  require_regime_ok: true
-  max_beta_instability_pct: 0.3
-  max_turnover_per_month: 20
-
-# Exports additionnels
-exports:
-  journals_dir: reports/journals
-  decisions_csv: reports/decisions.csv
-  topk: 30

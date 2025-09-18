@@ -1,0 +1,10 @@
+enabled: true
+smtp_host: smtp.gmail.com
+smtp_port: 587
+use_tls: true
+skip_tls_verify: true 
+username: soufiane173@gmail.com
+password: ""
+sender: soufiane173@gmail.com
+recipients: ["soufianeelhidaoui@gmail.com"]
+subject_prefix: "[StatArb]"
