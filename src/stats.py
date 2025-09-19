@@ -113,3 +113,6 @@ def _halflife_ar1(series: pd.Series) -> float:
         return np.nan
     hl = -np.log(2) / np.log(1 + phi)
     return float(hl) if hl > 0 else np.nan
+
+def rolling_zscore_spread(spread: pd.Series, window: int) -> pd.Series:
+    return zscore(spread, window)

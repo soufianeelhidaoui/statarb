@@ -1,7 +1,13 @@
-env:
-  mode: prod   # 'dev' => yfinance; 'prod' => IBKR
+data:
+  source: ibkr            # 'yahoo' | 'ibkr'
+  store: parquet
+  separate_roots: true
+  root_dir_yahoo: data/eod/ETFs_yahoo
+  root_dir_ibkr: data/eod/ETFs_ibkr
+  calendar: US
 
-mode: daily
+trading:
+  mode: paper             # 'paper' | 'live'
 
 universe:
   tickers: [SPY, QQQ, DIA, IWM, XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLRE, XLU, XLB, XLC]
@@ -9,47 +15,64 @@ universe:
 pairs:
   rebalance_days: 21
 
+risk: 
+  capital: 500
+  notional_per_trade: 120
+  per_trade_pct: null
+  max_pairs_open: 1
+  daily_dd_stop_pct: 0.02
+
+profiles:
+  paper:
+    risk:
+      capital: 500
+      notional_per_trade: 120
+      per_trade_pct: null
+      max_pairs_open: 1
+  live:
+    risk:
+      capital: 2000
+      notional_per_trade: 300
+      per_trade_pct: null
+      max_pairs_open: 2
+
 lookbacks:
   corr_days: 120
   coint_days: 120
   zscore_days_min: 12
   zscore_mult_half_life: 3.0
 
+# selection:
+#   min_corr: 0.6
+#   max_half_life_days: 20
+#   pval_coint: 0.05
+
+# thresholds:
+#   entry_z: 2.2
+#   exit_z: 0.5
+#   stop_z: 3.0
+#   time_stop_days: 10
+
+selection:
+  min_corr: 0.55
+  max_half_life_days: 30
+  pval_coint: 0.10
+
 thresholds:
-  entry_z: 2.2
-  exit_z: 0.2
-  stop_z: 3.0
-  time_stop_days: 10
+  entry_z: 2.0
+  exit_z: 0.6
+  stop_z: 3.5
 
-risk:
-  capital: 100000
-  per_trade_pct: 0.003
-  max_pairs_open: 5
-  daily_dd_stop_pct: 0.02
 
-costs:
-  commission_per_share: 0.005
-  slippage_bp: 2
+stability:
+  lookback_days: 120
+  subwindows: 3
+  min_pass_ratio: 0.67
 
-data:
-  source_dev: yfinance
-  source_prod: ibkr
-  store: parquet
-  separate_roots: true
-  root_dir: data/eod/ETFs
-  root_dir_dev: data/eod/ETFs_dev
-  root_dir_prod: data/eod/ETFs_prod
-  calendar: US
-
-quality:
-  px_policy: "best"                 # 'best' (adj si dispo, sinon close) | 'close_only'
-  prefer_adj_close: true
-  rebuild_adj_from_yahoo: true      # calcule adj_close depuis Yahoo (facteur) + is_ex_div
-  compare_adj_tolerance_bp: 50
-  mask_ex_div: true
-  mask_ex_div_days_after: 1
-  min_volume: 1000000
-  max_bidask_spread_bp: 20
+decision:
+  cool_off_bars: 5
+  min_bars_between_entries: 10
+  max_turnover_per_month: 8
 
 stats_filters:
   require_coint: true
@@ -62,34 +85,32 @@ stats_filters:
 
 market_filters:
   enable: true
-  vix_path: data/eod/ETFs_dev/^VIX.parquet
+  vix_path: data/eod/ETFs_yahoo/^VIX.parquet
   vix_max: 35
   macro_calendar_csv: config/macro_calendar.csv
   cool_off_hours: 2
 
-selection:
-  min_corr: 0.6
-  max_half_life_days: 20
-  pval_coint: 0.05
-
 quality:
-  strict: true
-  min_history_days: 200
-  min_overlap_days: 120         # chevauchement min YA/XB en jours utiles
-  max_nan_ratio_px: 0.01        # max 1% de NaN dans px (après coalesce adj→close)
-  require_adj_close: true       # exige adj_close construit sur toute l’histoire
+  px_policy: best
+  prefer_adj_close: true
+  rebuild_adj_from_yahoo: true
+  compare_adj_tolerance_bp: 50
+  mask_ex_div: true
+  mask_ex_div_days_after: 1
+  min_volume: 1000000
+  max_bidask_spread_bp: 20
   require_provenance_match: true
-  require_ex_div_mask: true
-  require_half_life: true
 
-decision:
-  cool_off_bars: 2             
-  min_bars_between_entries: 3 
-  max_turnover_per_month: 8
+costs:
+  commission_per_share: 0.005
+  slippage_bp: 2
 
 exports:
   topk: 20
   reports_dir: reports
+  journals_dir: reports/journals
+  decisions_csv: reports/decisions.csv
+  orders_csv: reports/orders.csv
 
 reports:
   pairs_scored_dir: reports/pairs_scored

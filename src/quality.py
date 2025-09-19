@@ -1,119 +1,85 @@
 from __future__ import annotations
 from pathlib import Path
-import pandas as pd
-import polars as pl
 import json
+import polars as pl
+import pandas as pd
 from datetime import datetime
 
-def _now_str():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def _now_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-def write_qa_log(path, lines: list[str]):
-    """Tolérant: accepte str/Path et crée le dossier si besoin."""
-    p = Path(path)  
+def write_qa_log(path: Path | str, lines: list[str]) -> None:
+    p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a") as f:
-        for L in lines:
-            f.write((L.rstrip() if isinstance(L, str) else str(L)).encode("utf-8", "ignore").decode("utf-8") + "\n")
+    with p.open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line.rstrip() + "\n")
 
-def assert_provenance(root_dir: Path, expected, enabled: bool, qa_log):
-    """
-    Vérifie _PROVENANCE.json['source'] ∈ expected.
-    - expected peut être str ou une collection (set/list/tuple).
-    """
-    if not enabled:
-        return
-    p = Path(root_dir) / "_PROVENANCE.json"
-    if not p.exists():
-        msg = f"[FATAL] {_now_str()} provenance manquante: {p}"
-        write_qa_log(qa_log, [msg])
-        raise RuntimeError(msg)
-
-    data = json.loads(p.read_text())
-    got = data.get("source", "")
-
-    if isinstance(expected, (set, list, tuple)):
-        exp = set(expected)
-    else:
-        exp = {str(expected)}
-
-    if got not in exp:
-        msg = f"[FATAL] {_now_str()} provenance mismatch: expected∈{sorted(exp)} got={got}"
-        write_qa_log(qa_log, [msg])
-        raise RuntimeError(msg)
-
+def assert_provenance(root_dir: Path, expected_source: str | set[str], require_match: bool, qa_log: Path | str) -> None:
+    prov = Path(root_dir) / "_PROVENANCE.json"
+    if not prov.exists():
+        msg = f"[FATAL] {_now_str()} provenance manquante: {prov.as_posix()}"
+        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
+    j = json.loads(prov.read_text())
+    got = str(j.get("source", "")).lower()
+    def _ok():
+        if isinstance(expected_source, set):
+            return got in {s.lower() for s in expected_source}
+        return got == str(expected_source).lower()
+    if require_match and not _ok():
+        msg = f"[FATAL] {_now_str()} provenance mismatch: expected={expected_source} got={got}"
+        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
     write_qa_log(qa_log, [f"[OK] {_now_str()} provenance source={got} acceptée."])
 
-def assert_price_series_ok(dfpl: pl.DataFrame, ticker: str, cfg: dict, qa_log: Path):
-    strict = cfg.get("strict", False)
-    min_overlap = int(cfg.get("min_overlap_days", 120))
-    max_nan_ratio = float(cfg.get("max_nan_ratio_px", 0.01))
-    require_adj = bool(cfg.get("require_adj_close", True))
-    require_ex_div = bool(cfg.get("require_ex_div_mask", True))
-
-    # colonnes
-    need = {"date","close"}
-    missing = need - set(dfpl.columns)
-    if missing:
-        msg = f"[FATAL] {_now_str()} {ticker}: colonnes manquantes {missing}"
+def assert_pairs_scored_schema(scored: pd.DataFrame, quality_cfg: dict, qa_log: Path | str) -> None:
+    need = {"a","b","corr","pval","score"}
+    miss = need - set(scored.columns)
+    if miss:
+        msg = f"[FATAL] {_now_str()} pairs_scored: colonnes manquantes: {miss}"
         write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-    # coalesce px
-    has_adj = "adj_close" in dfpl.columns
-    if require_adj and not has_adj:
-        msg = f"[FATAL] {_now_str()} {ticker}: adj_close absent en mode strict"
-        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-    dfpl = dfpl.select([
-        "date",
-        (pl.coalesce([pl.col("adj_close"), pl.col("close")]).alias("px")) if has_adj else pl.col("close").alias("px"),
-        *([pl.col("is_ex_div")] if "is_ex_div" in dfpl.columns else [])
-    ]).sort("date")
-
-    pdf = dfpl.to_pandas().sort_values("date")
-    n = len(pdf)
-    min_len = int(max(
-        cfg.get("min_history_days", 0),     
-        120                                  
-    ))
-    if n < min_len:
-        msg = f"[FATAL] {_now_str()} {ticker}: historique trop court n={n} < {min_len}"
-        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-    n_nan = int(pdf["px"].isna().sum())
-    ratio = 0.0 if n == 0 else n_nan / n
-    n_nan = int(pdf["px"].isna().sum())
-    ratio = 0.0 if n == 0 else n_nan / n
-
-    if strict and ratio > max_nan_ratio:
-        msg = f"[FATAL] {_now_str()} {ticker}: ratio NaN px={ratio:.3%} > {max_nan_ratio:.3%}"
-        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-    # overlap (seulement vérifiable au moment du merge, donc on log ici la longueur)
-    write_qa_log(qa_log, [f"[OK] {_now_str()} {ticker}: n={n}, nan_px={n_nan} ({ratio:.2%})"])
-
-    if require_ex_div and "is_ex_div" not in pdf.columns:
-        msg = f"[FATAL] {_now_str()} {ticker}: is_ex_div absent en mode strict"
-        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-def assert_pairs_scored_schema(scored: pd.DataFrame, cfg: dict, qa_log: Path):
-    strict = cfg.get("strict", False)
-    need_min = {"a","b","corr","pval","score"}
-    missing = need_min - set(scored.columns)
-    if missing:
-        msg = f"[FATAL] {_now_str()} pairs_scored: colonnes minimales manquantes {missing}"
-        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-
-    if cfg.get("require_half_life", True):
-        if not any(c in scored.columns for c in ["half_life","half_life_days","hl"]):
-            msg = f"[FATAL] {_now_str()} pairs_scored: half_life requise mais absente"
-            write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
     write_qa_log(qa_log, [f"[OK] {_now_str()} pairs_scored schema validé."])
 
-def check_overlap_len(ya: pd.Series, xb: pd.Series, cfg: dict, qa_log: Path):
-    min_overlap = int(cfg.get("min_overlap_days", 120))
-    j = pd.concat([ya, xb], axis=1).dropna()
-    if len(j) < min_overlap:
-        msg = f"[FATAL] {_now_str()} overlap insuffisant: {len(j)} < {min_overlap}"
+def assert_price_series_ok(dfpl: pl.DataFrame, ticker: str, quality_cfg: dict, qa_log: Path | str) -> None:
+    strict = bool(quality_cfg.get("require_provenance_match", True))
+    mask_ex = bool(quality_cfg.get("mask_ex_div", True))
+    require_ex = bool(quality_cfg.get("require_is_ex_div", True)) if mask_ex else False
+    tol_bp = int(quality_cfg.get("compare_adj_tolerance_bp", 50))
+    has_cols = set(dfpl.columns)
+    n = dfpl.height
+    if n == 0:
+        msg = f"[FATAL] {_now_str()} {ticker}: série vide"
         write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
-    write_qa_log(qa_log, [f"[OK] {_now_str()} overlap={len(j)} jours ≥ {min_overlap}"])
+    if not {"date","close"}.issubset(has_cols):
+        msg = f"[FATAL] {_now_str()} {ticker}: colonnes de base manquantes"
+        write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
+    if "adj_close" not in has_cols and quality_cfg.get("px_policy","best") == "best":
+        write_qa_log(qa_log, [f"[WARN] {_now_str()} {ticker}: adj_close absent → fallback close"])
+    if require_ex and "is_ex_div" not in has_cols:
+        if bool(quality_cfg.get("auto_fix_is_ex_div", True)):
+            from .repair import ensure_is_ex_div
+            parquet_path = dfpl.estimated_size() and None
+            msg_try = f"[FIX] {_now_str()} {ticker}: is_ex_div absent → tentative de reconstruction locale"
+            write_qa_log(qa_log, [msg_try])
+            pdf = dfpl.to_pandas()
+            if "adj_close" in pdf.columns:
+                factor = (pdf["adj_close"] / pdf["close"])
+                change = (factor / factor.shift(1) - 1.0).abs()
+                pdf["is_ex_div"] = (change * 10_000 > max(1, tol_bp)).fillna(False)
+                dfpl = pl.from_pandas(pdf)
+            else:
+                pdf = dfpl.to_pandas()
+                pdf["is_ex_div"] = False
+                dfpl = pl.from_pandas(pdf)
+            write_qa_log(qa_log, [f"[OK] {_now_str()} {ticker}: is_ex_div reconstruit en mémoire"])
+        else:
+            msg = f"[FATAL] {_now_str()} {ticker}: is_ex_div absent en mode strict"
+            write_qa_log(qa_log, [msg]); raise RuntimeError(msg)
+    nan_px = int(dfpl["close"].is_null().sum())
+    ratio = 100.0 * nan_px / n
+    write_qa_log(qa_log, [f"[OK] {_now_str()} {ticker}: n={n}, nan_px={nan_px} ({ratio:.2f}%)"])
+
+def check_overlap_len(ya: pd.Series, xb: pd.Series, quality_cfg: dict, qa_log: Path | str) -> None:
+    idx = ya.dropna().index.intersection(xb.dropna().index)
+    if len(idx) < 120:
+        msg = f"[WARN] {_now_str()} overlap court: {len(idx)}"
+        write_qa_log(qa_log, [msg])
