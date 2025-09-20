@@ -55,25 +55,25 @@ lookbacks:
 #   time_stop_days: 10
 
 # #2
-selection:
-  min_corr: 0.55
-  max_half_life_days: 30
-  pval_coint: 0.10
-
-thresholds:
-  entry_z: 2.0
-  exit_z: 0.6
-  stop_z: 3.5
-
 # selection:
-#   min_corr: 0.6
-#   pval_coint: 0.05
-#   max_half_life_days: 20
+#   min_corr: 0.55
+#   max_half_life_days: 30
+#   pval_coint: 0.10
 
 # thresholds:
-#   entry_z: 2.5
-#   exit_z: 0.5
+#   entry_z: 2.0
+#   exit_z: 0.6
 #   stop_z: 3.5
+
+selection:
+  min_corr: 0.6
+  pval_coint: 0.05
+  # max_half_life_days: 20
+
+thresholds:
+  entry_z: 2.5
+  exit_z: 0.5
+  stop_z: 3.5
 
 
 stability:
@@ -85,6 +85,8 @@ decision:
   cool_off_bars: 5
   min_bars_between_entries: 10
   max_turnover_per_month: 8
+  entry_require_cross: true
+  entry_slope_confirm: true
 
 stats_filters:
   require_coint: true

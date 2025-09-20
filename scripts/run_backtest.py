@@ -160,6 +160,10 @@ def main():
         dfa = get_price_series(root, a)
         dfb = get_price_series(root, b)
         df = merge_close_series(dfa, dfb)
+        
+        logic = params.get("decision", {})
+        require_cross = bool(logic.get("entry_require_cross", True))
+        slope_confirm = bool(logic.get("entry_slope_confirm", True))
 
         total, journal = simulate_pair(
             df,
@@ -173,8 +177,8 @@ def main():
             cool_off_bars=int(params.get("decision", {}).get("cool_off_bars", 5)),
             min_bars_between_entries=int(params.get("decision", {}).get("min_bars_between_entries", 10)),
             notional_per_trade=float(risk.get("notional_per_trade", 0.0) or 0.0),
-            require_cross=True,
-            slope_confirm=True,
+            require_cross=require_cross,
+            slope_confirm=slope_confirm,    
         )
         journal.to_csv(out_dir / f"journal_{a}_{b}.csv")
         rows.append((a, b, hl, zwin, _count_entries(journal["signal"]) if "signal" in journal.columns else 0, float(total)))

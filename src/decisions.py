@@ -83,6 +83,10 @@ def decide_pair(ya: pd.Series, xb: pd.Series, spy: pd.Series | None, params: dic
     mf = params.get("market_filters", {})
     lb = params.get("lookbacks", {})
     zmin = int(lb.get("zscore_days_min", 30))
+    logic = params.get("decision", {})
+    require_cross = bool(logic.get("entry_require_cross", True))
+    slope_confirm = bool(logic.get("entry_slope_confirm", True))
+
     if mf.get("enable", True):
         if not vix_ok(mf.get("vix_path",""), mf.get("vix_max", 1000)):
             return {"a":a,"b":b,"verdict":"HOLD","action":"None","reason":"High VIX regime","z_last":np.nan,"hl":np.nan,"beta":np.nan,"pval":1.0}
@@ -129,15 +133,22 @@ def decide_pair(ya: pd.Series, xb: pd.Series, spy: pd.Series | None, params: dic
     entry_z = float(params["thresholds"]["entry_z"])
     exit_z = float(params["thresholds"]["exit_z"])
     stop_z = float(params["thresholds"]["stop_z"])
-    enter = _crossing_ok(z_prev, z_last, entry_z)
+    
+    if require_cross:
+        enter = _crossing_ok(z_prev, z_last, entry_z)
+    else:
+        enter = abs(z_last) >= entry_z
+    
     if enter:
         direction = 1 if z_last >= 0 else -1
-        if not _slope_ok(z.tail(5), lookback=3, direction=direction):
+        
+        if slope_confirm and not _slope_ok(z.tail(5), lookback=3, direction=direction):
             return {"a":a,"b":b,"verdict":"HOLD","action":"None","reason":"Slope check failed","z_last":z_last,"hl":hl,"beta":beta,"pval":pval}
+        
         if z_last >= entry_z:
-            verdict, action, reason = "ENTER", "ShortY_LongX", "Crossing up"
+            verdict, action, reason = "ENTER", "ShortY_LongX", "Crossing up" if require_cross else "Above threshold"
         else:
-            verdict, action, reason = "ENTER", "LongY_ShortX", "Crossing down"
+            verdict, action, reason = "ENTER", "LongY_ShortX", "Crossing down" if require_cross else "Below threshold"
     else:
-        verdict, action, reason = "HOLD", "None", "No crossing"
+        verdict, action, reason = "HOLD", "None", "No crossing" if require_cross else "No threshold breach"
     return {"a":a,"b":b,"verdict":verdict,"action":action,"reason":reason,"z_last":z_last,"hl":hl,"beta":beta,"pval":pval}
