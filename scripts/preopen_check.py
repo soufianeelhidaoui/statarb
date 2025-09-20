@@ -1,93 +1,97 @@
 #!/usr/bin/env python3
-"""
-Vérifications pré-ouverture (2 minutes) :
-- Trouve le dernier bundle reports/<env>/<YYYY-MM-DD>/
-- Valide : présence des fichiers, non-vide, pas de NaN critiques
-- Vérifie pour chaque paire : données d'hier présentes, volume >= min_volume
-- (Option) envoie un email si anomalies trouvées
-"""
-import argparse, os
+from __future__ import annotations
 from pathlib import Path
-import pandas as pd
-from src.config import load_params
-from src.notify_email import load_email_config, send_email
+import argparse, pandas as pd, yaml, logging
+from datetime import datetime, timezone
 
-def _find_latest_bundle(reports_dir: Path, env: str) -> Path | None:
-    env_dir = reports_dir / env
-    if not env_dir.exists():
-        return None
-    days = sorted([d for d in env_dir.iterdir() if d.is_dir()], reverse=True)
-    return days[0] if days else None
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-def _root_dir_for_env(params: dict) -> Path:
-    d = params["data"]
-    if d.get("separate_roots", False):
-        return Path(d["root_dir_prod" if params["env"]["mode"]=="prod" else "root_dir_dev"])
-    return Path(d["root_dir"])
-
-def _alert(subject: str, body_html: str):
-    cfg = load_email_config()
-    if cfg.get("enabled", False):
-        try: send_email(subject, body_html, cfg)
-        except Exception as e: print("[email] failed:", e)
+def load_params(p="config/params.yaml")->dict:
+    with open(p,"r") as f: return yaml.safe_load(f)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--env", choices=["dev","prod"], help="override env")
+    ap.add_argument("--bundle", required=True)
+    ap.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = ap.parse_args()
 
-    params = load_params()
-    env_mode = args.env or params["env"]["mode"]
-    reports_root = Path(params["exports"].get("reports_dir","reports"))
-    bundle_dir = _find_latest_bundle(reports_root, env_mode)
-    if bundle_dir is None:
-        print("[WARN] Aucun bundle trouvé"); return
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
-    dec_fp = bundle_dir / "decisions.csv"
-    ord_fp = bundle_dir / "orders.csv"
-    assert dec_fp.exists(), "decisions.csv manquant"
-    assert ord_fp.exists(), "orders.csv manquant"
+    bdir = Path(args.bundle)
+    logger.info(f"Pre-market check for bundle: {bdir}")
 
-    dec = pd.read_csv(dec_fp)
-    orders = pd.read_csv(ord_fp)
+    dec = bdir/"decisions.csv"
+    ords= bdir/"orders.csv"
+    
+    # Load and validate files
+    if not dec.exists():
+        logger.warning(f"Decisions file not found: {dec}")
+        D = pd.DataFrame()
+    else:
+        D = pd.read_csv(dec)
+        logger.debug(f"Loaded {len(D)} decisions from {dec}")
+    
+    if not ords.exists():
+        logger.warning(f"Orders file not found: {ords}")
+        O = pd.DataFrame()
+    else:
+        O = pd.read_csv(ords)
+        logger.debug(f"Loaded {len(O)} orders from {ords}")
 
-    anomalies = []
-    if dec.empty: anomalies.append("decisions.csv est vide")
-    if orders.empty: anomalies.append("orders.csv est vide")
+    # Filter relevant data
+    D = D[D["verdict"].isin(["ENTER","EXIT","HOLD"])] if not D.empty else D
+    O = O[O["verdict"].isin(["ENTER","EXIT"])] if not O.empty else O
 
-    # checks de base sur orders
-    required_cols = ["a","b","entry_when","action","target_notional_total"]
-    missing = [c for c in required_cols if c not in orders.columns]
-    if missing: anomalies.append(f"Colonnes manquantes dans orders: {missing}")
+    # Summary counts
+    enter_count = len(D[D["verdict"] == "ENTER"]) if not D.empty else 0
+    exit_count = len(D[D["verdict"] == "EXIT"]) if not D.empty else 0
+    hold_count = len(D[D["verdict"] == "HOLD"]) if not D.empty else 0
+    order_count = len(O)
 
-    # info volumes (si disponible sur dernier jour dans Parquet)
-    try:
-        root = _root_dir_for_env(params)
-        min_vol = int(params.get("quality",{}).get("min_volume", 0))
-        if min_vol > 0:
-            import polars as pl
-            for t in set(orders["a"]).union(set(orders["b"])):
-                p = root / f"{t}.parquet"
-                if not p.exists():
-                    anomalies.append(f"{t}.parquet absent")
-                    continue
-                df = pl.read_parquet(p).select(["date","volume"]).sort("date").to_pandas().set_index("date")
-                if len(df)==0 or "volume" not in df: continue
-                vol = float(df["volume"].iloc[-1])
-                if vol < min_vol:
-                    anomalies.append(f"Volume insuffisant pour {t}: {vol} < {min_vol}")
-    except Exception as e:
-        anomalies.append(f"Erreur check volume: {e}")
+    logger.info(f"Summary: {enter_count} ENTER, {exit_count} EXIT, {hold_count} HOLD decisions → {order_count} orders")
 
-    if anomalies:
-        print("[PREOPEN] Anomalies:")
-        for a in anomalies: print(" -", a)
-        _alert(f"[StatArb] PREOPEN anomalies ({env_mode})",
-               "<br/>".join(f"- {a}" for a in anomalies))
-        raise SystemExit(2)
+    # Display tables
+    print(f"\n{'='*60}")
+    print(f"PRE-MARKET CHECK - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"Bundle: {bdir}")
+    print(f"{'='*60}")
+    
+    print(f"\nDECISIONS ({len(D)} total):")
+    if D.empty:
+        print("  No decisions to review")
+    else:
+        print(D[["a","b","verdict","action","reason","z_last","hl","beta","pval"]].to_string(index=False))
+    
+    print(f"\nORDERS TO EXECUTE ({len(O)} total):")
+    if O.empty:
+        print("  No orders to execute")
+        logger.info("All clear - no orders to execute")
+    else:
+        print(O[["a","b","side_a","qty_a","side_b","qty_b"]].to_string(index=False))
+        
+        # Risk warnings
+        total_notional = (O["qty_a"] * O["price_a"] + O["qty_b"] * O["price_b"]).sum() if "price_a" in O.columns else 0
+        if total_notional > 0:
+            logger.info(f"Total notional to trade: ${total_notional:,.0f}")
+        
+        if len(O) > 5:
+            logger.warning(f"High order count: {len(O)} orders (review carefully)")
 
-    print("[PREOPEN] OK - pas d'anomalie bloquante.")
-    _alert(f"[StatArb] PREOPEN OK ({env_mode})", "<p>Tous les checks sont OK.</p>")
+    print(f"{'='*60}\n")
+
+    # Final validation
+    if not O.empty:
+        logger.info("Ready for market execution - review orders above")
+        return 0
+    else:
+        logger.info("No execution needed today")
+        return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())

@@ -10,3 +10,4 @@ PyYAML>=6.0.2
 matplotlib>=3.10.6
 seaborn>=0.13.2
 statsmodels>=0.14
+python-dotenv>=1.0.0

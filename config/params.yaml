@@ -25,14 +25,14 @@ risk:
 profiles:
   paper:
     risk:
-      capital: 500
-      notional_per_trade: 120
+      capital: 3000
+      notional_per_trade: 500
       per_trade_pct: null
       max_pairs_open: 1
   live:
     risk:
-      capital: 2000
-      notional_per_trade: 300
+      capital: 3000
+      notional_per_trade: 500
       per_trade_pct: null
       max_pairs_open: 2
 
@@ -42,6 +42,7 @@ lookbacks:
   zscore_days_min: 12
   zscore_mult_half_life: 3.0
 
+# #1
 # selection:
 #   min_corr: 0.6
 #   max_half_life_days: 20
@@ -53,6 +54,7 @@ lookbacks:
 #   stop_z: 3.0
 #   time_stop_days: 10
 
+# #2
 selection:
   min_corr: 0.55
   max_half_life_days: 30
@@ -62,6 +64,16 @@ thresholds:
   entry_z: 2.0
   exit_z: 0.6
   stop_z: 3.5
+
+# selection:
+#   min_corr: 0.6
+#   pval_coint: 0.05
+#   max_half_life_days: 20
+
+# thresholds:
+#   entry_z: 2.5
+#   exit_z: 0.5
+#   stop_z: 3.5
 
 
 stability:
@@ -104,6 +116,14 @@ quality:
 costs:
   commission_per_share: 0.005
   slippage_bp: 2
+
+execution:
+  ib:
+    host: 127.0.0.1
+    port_paper: 7497      # Paper trading (TWS Demo)
+    port_live: 7496       # Live trading (TWS Live)
+    client_id: 23
+    allow_fractional: true
 
 exports:
   topk: 20

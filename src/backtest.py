@@ -1,124 +1,148 @@
 from __future__ import annotations
-from typing import Tuple, Optional
-import numpy as np
-import pandas as pd
 import polars as pl
+import pandas as pd
+import numpy as np
 
-def merge_close_series(a_pl: pl.DataFrame, b_pl: pl.DataFrame) -> pd.DataFrame:
-    da = a_pl.select(['date','close']).to_pandas()
-    db = b_pl.select(['date','close']).to_pandas()
-    da["date"] = pd.to_datetime(da["date"]); db["date"] = pd.to_datetime(db["date"])
-    j = pd.merge(da, db, on="date", how="inner", suffixes=("_a","_b")).sort_values("date")
-    j = j.rename(columns={"close_a":"ya","close_b":"xb"})
-    return j[["date","ya","xb"]]
+def merge_close_series(a: pl.DataFrame, b: pl.DataFrame) -> pd.DataFrame:
+    da = a.select(["date", "close"]).to_pandas().set_index("date")
+    db = b.select(["date", "close"]).to_pandas().set_index("date")
+    df = da.join(db, how="inner", lsuffix="_a", rsuffix="_b")
+    df.columns = ["ya", "xb"]
+    df = df.reset_index().rename(columns={"index": "date"})
+    return df
 
-def _rolling_z(x: pd.Series, window: int) -> pd.Series:
-    m = x.rolling(window, min_periods=window).mean()
-    s = x.rolling(window, min_periods=window).std(ddof=1)
-    z = (x - m) / s.replace(0.0, np.nan)
-    return z
+def _ols_beta(y: pd.Series, x: pd.Series) -> tuple[float, float]:
+    X = np.vstack([np.ones(len(x)), x.values]).T
+    alpha, beta = np.linalg.lstsq(X, y.values, rcond=None)[0]
+    return float(alpha), float(beta)
 
 def simulate_pair(
-    dfpl_merged,                   # pl.DataFrame|pd.DataFrame avec colonnes ['date','ya','xb', ('is_ex_div' opt.)]
+    df_merged: "pl.DataFrame | pd.DataFrame",
     entry_z: float,
     exit_z: float,
     stop_z: float,
     z_window: int,
-    risk_pct: float | None = None,
+    risk_pct: float,
     capital: float = 100_000.0,
     costs_bp: int = 2,
     cool_off_bars: int = 0,
     min_bars_between_entries: int = 0,
-    notional_per_trade: float | None = None,   # <-- nouveau
+    notional_per_trade: float = 0.0,
+    require_cross: bool = True,
+    slope_confirm: bool = True,
 ):
-    import numpy as np
-    import pandas as pd
-    import polars as pl
-
-    if isinstance(dfpl_merged, pl.DataFrame):
-        cols = ["date","ya","xb"]
-        if "is_ex_div" in dfpl_merged.columns:
-            cols.append("is_ex_div")
-        df = dfpl_merged.select(cols).to_pandas()
+    if isinstance(df_merged, pl.DataFrame):
+        cols = [c for c in ["date", "ya", "xb", "is_ex_div"] if c in df_merged.columns]
+        df = df_merged.select(cols).to_pandas()
     else:
-        cols = [c for c in ["date","ya","xb","is_ex_div"] if c in dfpl_merged.columns]
-        df = dfpl_merged[cols].copy()
+        cols = [c for c in ["date", "ya", "xb", "is_ex_div"] if c in df_merged.columns]
+        df = df_merged[cols].copy()
 
     df = df.sort_values("date")
     df["date"] = pd.to_datetime(df["date"])
 
     if "is_ex_div" in df.columns:
         ma = df["is_ex_div"].astype(bool)
-        mb = df["is_ex_div"].astype(bool)  # même colonne côté B si seule dispo
-        mask = ~(ma.fillna(False).astype(bool) | ma.shift(1).fillna(False).astype(bool) |
-                 mb.fillna(False).astype(bool) | mb.shift(1).fillna(False).astype(bool))
+        mask = ~(ma.fillna(False) | ma.shift(1).fillna(False))
         df = df.loc[mask].copy()
 
     if len(df) < max(30, z_window + 1):
-        out = df.copy()
-        out["z"] = np.nan; out["pos"] = 0; out["signal"] = 0
-        out["step_pnl"] = 0.0; out["cum_pnl"] = 0.0
-        return 0.0, out.set_index("date")[["z","pos","signal","step_pnl","cum_pnl"]]
+        j = pd.DataFrame(
+            {"date": df["date"], "z": np.nan, "pos": 0, "signal": 0, "step_pnl": 0.0, "cum_pnl": 0.0}
+        ).set_index("date")
+        return 0.0, j
 
-    X = np.vstack([np.ones(len(df)), df["xb"].values]).T
-    b = np.linalg.lstsq(X, df["ya"].values, rcond=None)[0]
-    alpha, beta = float(b[0]), float(b[1])
+    alpha, beta = _ols_beta(df["ya"], df["xb"])
     spread = df["ya"] - (alpha + beta * df["xb"])
-
-    roll_mean = spread.rolling(z_window).mean()
-    roll_std  = spread.rolling(z_window).std(ddof=1)
-    z = (spread - roll_mean) / roll_std
+    m = spread.rolling(z_window).mean()
+    s = spread.rolling(z_window).std(ddof=1)
+    z = (spread - m) / s.replace(0.0, np.nan)
     df["z"] = z
 
     pos = 0
-    last_entry_idx = -10**9
-    cool_until_idx = -10**9
+    last_entry = -10**9
+    cool_until = -10**9
+    z_prev = np.nan
+
+    N = float(notional_per_trade) if notional_per_trade > 0 else float(capital) * float(risk_pct)
+    cost_leg = abs(N) * (costs_bp / 10_000.0)
+
+    hold_a = 0.0
+    hold_b = 0.0
     pnl = 0.0
     step = []
 
-    if (notional_per_trade is not None) and (notional_per_trade > 0):
-        notional = float(notional_per_trade)
-    else:
-        notional = float(capital) * float(risk_pct or 0.0)
+    ya_prev = float(df["ya"].iloc[0])
+    xb_prev = float(df["xb"].iloc[0])
 
-    cost_per_leg = abs(notional) * (costs_bp / 10_000.0)
-    prev_spread = float(spread.iloc[0])
-
-    # échelle pnL: lisse la std pour éviter NaN/0
-    scale = roll_std.copy()
-    if scale.isna().any():
-        seed = scale.iloc[z_window:z_window+5].mean()
-        scale = scale.fillna(seed)
-        scale = scale.replace({0.0: np.nan}).bfill().ffill()
-    scale = scale.replace({0.0: np.nan}).fillna(scale.mean())
-
-    df["pos"] = 0; df["signal"] = 0; df["step_pnl"] = 0.0; df["cum_pnl"] = 0.0
-
-    for i, (dt, zi, sp_i) in enumerate(zip(df["date"].values, df["z"].values, spread.values)):
+    for i, (dt, zi, ya_i, xb_i) in enumerate(zip(df["date"].values, df["z"].values, df["ya"].values, df["xb"].values)):
         sig = 0
-        can_enter = (i >= cool_until_idx) and (i - last_entry_idx >= int(min_bars_between_entries))
+        can_enter = (i >= cool_until) and (i - last_entry >= int(min_bars_between_entries))
+        enter_short = False
+        enter_long = False
 
-        if pos == 0 and can_enter and pd.notna(zi):
-            if zi >= float(entry_z):
-                pos = -1; sig = -1; pnl -= cost_per_leg; last_entry_idx = i
-            elif zi <= -float(entry_z):
-                pos = +1; sig = +1; pnl -= cost_per_leg; last_entry_idx = i
+        if pd.notna(zi) and can_enter and pos == 0:
+            if require_cross:
+                if pd.notna(z_prev):
+                    if (z_prev > entry_z) and (zi <= entry_z):
+                        if (not slope_confirm) or (zi < z_prev):
+                            enter_short = True
+                    if (z_prev < -entry_z) and (zi >= -entry_z):
+                        if (not slope_confirm) or (zi > z_prev):
+                            enter_long = True
+            else:
+                if zi >= entry_z:
+                    enter_short = True
+                elif zi <= -entry_z:
+                    enter_long = True
 
+        if enter_short:
+            pos = -1
+            last_entry = i
+            qa = (N / 2.0) / max(ya_i, 1e-9)
+            qb = (N / 2.0) / max(xb_i, 1e-9) * beta
+            hold_a = -qa
+            hold_b = +qb
+            pnl -= 2.0 * cost_leg
+            sig = -1
+
+        elif enter_long:
+            pos = +1
+            last_entry = i
+            qa = (N / 2.0) / max(ya_i, 1e-9)
+            qb = (N / 2.0) / max(xb_i, 1e-9) * beta
+            hold_a = +qa
+            hold_b = -qb
+            pnl -= 2.0 * cost_leg
+            sig = +1
+
+        exit_now = False
         if pos != 0 and pd.notna(zi):
             if (abs(zi) <= float(exit_z)) or (abs(zi) >= float(stop_z)):
-                pos = 0; sig = 0; pnl -= cost_per_leg; cool_until_idx = i + int(cool_off_bars)
+                exit_now = True
 
-        d_spread = sp_i - prev_spread
-        prev_spread = sp_i
-        denom = float(scale.iloc[i]) if np.isfinite(scale.iloc[i]) else 1.0
-        pnl_step = float(pos) * (d_spread / denom) * (notional * 0.01)
-        pnl += pnl_step; step.append(pnl_step)
+        dya = float(ya_i) - ya_prev
+        dxb = float(xb_i) - xb_prev
+        ya_prev = float(ya_i)
+        xb_prev = float(xb_i)
 
-        df.loc[df.index[i], "pos"] = float(pos)
-        df.loc[df.index[i], "signal"] = float(sig)
-        df.loc[df.index[i], "step_pnl"] = float(pnl_step)
-        df.loc[df.index[i], "cum_pnl"] = float(pnl)
+        pnl_step = hold_a * dya + hold_b * dxb
+        pnl += pnl_step
+        step.append(pnl_step)
 
-    journal = df[["date","z","pos","signal","step_pnl","cum_pnl"]].set_index("date")
-    return float(journal["cum_pnl"].iloc[-1]), journal
+        if exit_now and pos != 0:
+            pos = 0
+            hold_a = 0.0
+            hold_b = 0.0
+            pnl -= 2.0 * cost_leg
+            cool_until = i + int(cool_off_bars)
 
+        df.loc[df.index[i], "pos"] = pos
+        df.loc[df.index[i], "signal"] = sig
+        df.loc[df.index[i], "step_pnl"] = pnl_step
+        df.loc[df.index[i], "cum_pnl"] = pnl
+
+        z_prev = zi
+
+    j = df[["date", "z", "pos", "signal", "step_pnl", "cum_pnl"]].copy().set_index("date")
+    return float(j["cum_pnl"].iloc[-1]), j

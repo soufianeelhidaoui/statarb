@@ -4,6 +4,9 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import yaml
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def load_email_config(path: str | Path = "config/email.yaml") -> dict:
