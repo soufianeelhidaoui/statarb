@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from .filters.stat_filters import hedge_ratio, coint_adf, z_window_by_half_life, zscore
+from .filters.stat_filters import hedge_ratio, coint_adf, z_window_by_half_life, zscore, slope_direction_ok
 from .filters.data_filters import liquidity_filter
 from .filters.market_filters import vix_ok, macro_ok
 
@@ -61,16 +61,7 @@ def _crossing_ok(prev_z: float, z: float, entry_z: float) -> bool:
         return True
     return False
 
-def _slope_ok(z_series: pd.Series, lookback: int = 3, direction: int = 0) -> bool:
-    z_series = pd.Series(z_series).dropna()
-    if len(z_series) < max(lookback, 3):
-        return False
-    tail = z_series.iloc[-lookback:]
-    x = np.arange(len(tail))
-    slope = np.polyfit(x, tail.values, 1)[0]
-    if direction == 0:
-        direction = 1 if tail.iloc[-1] >= 0 else -1
-    return (slope * direction) > 0.0
+
 
 def decide_pair(ya: pd.Series, xb: pd.Series, spy: pd.Series | None, params: dict, meta_a: dict | None = None, meta_b: dict | None = None) -> dict:
     a = ya.name
@@ -142,7 +133,7 @@ def decide_pair(ya: pd.Series, xb: pd.Series, spy: pd.Series | None, params: dic
     if enter:
         direction = 1 if z_last >= 0 else -1
         
-        if slope_confirm and not _slope_ok(z.tail(5), lookback=3, direction=direction):
+        if slope_confirm and not slope_direction_ok(z.tail(5), int(logic.get("slope_lookback", 3)), direction):
             return {"a":a,"b":b,"verdict":"HOLD","action":"None","reason":"Slope check failed","z_last":z_last,"hl":hl,"beta":beta,"pval":pval}
         
         if z_last >= entry_z:

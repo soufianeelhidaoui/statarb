@@ -2,6 +2,7 @@ from __future__ import annotations
 import polars as pl
 import pandas as pd
 import numpy as np
+from .filters.stat_filters import slope_direction_ok
 
 def merge_close_series(a: pl.DataFrame, b: pl.DataFrame) -> pd.DataFrame:
     da = a.select(["date", "close"]).to_pandas().set_index("date")
@@ -30,6 +31,7 @@ def simulate_pair(
     notional_per_trade: float = 0.0,
     require_cross: bool = True,
     slope_confirm: bool = True,
+    slope_lookback: int = 3,
 ):
     if isinstance(df_merged, pl.DataFrame):
         cols = [c for c in ["date", "ya", "xb", "is_ex_div"] if c in df_merged.columns]
@@ -85,16 +87,18 @@ def simulate_pair(
             if require_cross:
                 if pd.notna(z_prev):
                     if (z_prev > entry_z) and (zi <= entry_z):
-                        if (not slope_confirm) or (zi < z_prev):
+                        if not slope_confirm or slope_direction_ok(df["z"].iloc[:i+1], slope_lookback, -1):
                             enter_short = True
                     if (z_prev < -entry_z) and (zi >= -entry_z):
-                        if (not slope_confirm) or (zi > z_prev):
+                        if not slope_confirm or slope_direction_ok(df["z"].iloc[:i+1], slope_lookback, 1):
                             enter_long = True
             else:
                 if zi >= entry_z:
-                    enter_short = True
+                    if not slope_confirm or slope_direction_ok(df["z"].iloc[:i+1], slope_lookback, -1):
+                        enter_short = True
                 elif zi <= -entry_z:
-                    enter_long = True
+                    if not slope_confirm or slope_direction_ok(df["z"].iloc[:i+1], slope_lookback, 1):
+                        enter_long = True
 
         if enter_short:
             pos = -1

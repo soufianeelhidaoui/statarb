@@ -178,7 +178,8 @@ def main():
             min_bars_between_entries=int(params.get("decision", {}).get("min_bars_between_entries", 10)),
             notional_per_trade=float(risk.get("notional_per_trade", 0.0) or 0.0),
             require_cross=require_cross,
-            slope_confirm=slope_confirm,    
+            slope_confirm=slope_confirm,
+            slope_lookback=int(logic.get("slope_lookback", 3)),
         )
         journal.to_csv(out_dir / f"journal_{a}_{b}.csv")
         rows.append((a, b, hl, zwin, _count_entries(journal["signal"]) if "signal" in journal.columns else 0, float(total)))

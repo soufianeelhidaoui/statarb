@@ -63,3 +63,14 @@ def beta_stable(y: pd.Series, x: pd.Series, tol: float) -> tuple[bool, float]:
 
 def z_window_by_half_life(hl: float, zmin: int, mult: float) -> int:
     return int(max(zmin, np.ceil(mult * max(hl,1.0))))
+
+def slope_direction_ok(z_series: pd.Series, lookback: int, direction: int) -> bool:
+    z_series = pd.Series(z_series).dropna()
+    if len(z_series) < max(lookback, 3):
+        return False
+    tail = z_series.iloc[-lookback:]
+    x = np.arange(len(tail))
+    slope = np.polyfit(x, tail.values, 1)[0]
+    if direction == 0:
+        direction = 1 if tail.iloc[-1] >= 0 else -1
+    return (slope * direction) > 0.0

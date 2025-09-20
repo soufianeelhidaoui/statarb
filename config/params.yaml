@@ -87,6 +87,7 @@ decision:
   max_turnover_per_month: 8
   entry_require_cross: true
   entry_slope_confirm: true
+  slope_lookback: 3
 
 stats_filters:
   require_coint: true
